@@ -1,0 +1,693 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, maximum-scale=1.0">
+  <title>CyberDrive - Bluetooth Serial Controller</title>
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Lucide Icons -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <style>
+    /* Prevent accidental text selection and pull-to-refresh during rapid tapping */
+    * {
+      -webkit-touch-callout: none;
+      -webkit-user-select: none;
+      user-select: none;
+      touch-action: manipulation;
+    }
+    input, textarea {
+      -webkit-user-select: auto;
+      user-select: auto;
+    }
+    /* Custom scrollbar for cyber terminal */
+    ::-webkit-scrollbar {
+      width: 6px;
+      height: 6px;
+    }
+    ::-webkit-scrollbar-track {
+      background: #0f172a;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: #334155;
+      border-radius: 3px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+      background: #06b6d4;
+    }
+    /* D-pad active lighting */
+    .dpad-btn:active, .dpad-btn.active {
+      transform: scale(0.94);
+      filter: brightness(1.25);
+      box-shadow: 0 0 20px rgba(6, 182, 212, 0.6);
+    }
+    .neon-glow-cyan {
+      box-shadow: 0 0 15px rgba(6, 182, 212, 0.35);
+    }
+    .neon-glow-red {
+      box-shadow: 0 0 15px rgba(239, 68, 68, 0.4);
+    }
+  </style>
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen flex flex-col font-sans selection:bg-cyan-500 selection:text-black">
+
+  <!-- Header -->
+  <header class="bg-slate-900/90 border-b border-cyan-900/50 backdrop-blur sticky top-0 z-30 px-4 py-3">
+    <div class="max-w-6xl mx-auto flex flex-wrap items-center justify-between gap-3">
+      <div class="flex items-center space-x-2">
+        <div class="p-2 bg-cyan-950/80 border border-cyan-500/40 rounded-lg text-cyan-400">
+          <i data-lucide="cpu" class="w-5 h-5"></i>
+        </div>
+        <div>
+          <h1 class="text-base sm:text-lg font-bold tracking-wider text-cyan-400 uppercase flex items-center gap-2">
+            CyberDrive <span class="text-[10px] px-1.5 py-0.5 rounded bg-cyan-900/60 text-cyan-300 font-mono border border-cyan-700/50">BLE v2.0</span>
+          </h1>
+          <p class="text-xs text-slate-400 hidden sm:block">UART Serial Terminal & Dual-Axis Keypad</p>
+        </div>
+      </div>
+
+      <!-- Connection Status & Profile -->
+      <div class="flex items-center gap-2 sm:gap-3 flex-wrap">
+        <!-- Status Indicator -->
+        <div id="statusBadge" class="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-mono font-semibold bg-rose-950/60 text-rose-400 border border-rose-800/60">
+          <span class="w-2 h-2 rounded-full bg-rose-500 animate-pulse"></span>
+          <span id="statusText">DISCONNECTED</span>
+        </div>
+
+        <!-- Mode Toggle Indicator -->
+        <span id="simTag" class="hidden text-[11px] px-2 py-1 rounded bg-amber-950/80 text-amber-300 border border-amber-800 font-mono">
+          TEST SIM
+        </span>
+
+        <!-- Connect / Disconnect Buttons -->
+        <button id="btnConnect" onclick="handleConnect()" class="flex items-center gap-1.5 px-3.5 py-1.5 bg-cyan-500 hover:bg-cyan-400 active:bg-cyan-600 text-slate-950 font-bold rounded-lg text-xs sm:text-sm shadow-md transition shadow-cyan-500/20">
+          <i data-lucide="bluetooth" class="w-4 h-4"></i>
+          <span>Connect BLE</span>
+        </button>
+
+        <button id="btnDisconnect" onclick="handleDisconnect()" class="hidden items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-red-950 hover:text-red-400 hover:border-red-800 active:scale-95 text-slate-300 font-semibold rounded-lg text-xs sm:text-sm border border-slate-700 transition">
+          <i data-lucide="power" class="w-4 h-4"></i>
+          <span>Disconnect</span>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <!-- Notification Banner -->
+  <div id="noticeBanner" class="max-w-6xl mx-auto w-full px-4 pt-3 hidden">
+    <div id="noticeContent" class="flex items-center justify-between p-3 rounded-lg text-xs font-mono border"></div>
+  </div>
+
+  <!-- Main Grid Layout -->
+  <main class="max-w-6xl mx-auto w-full flex-1 p-3 sm:p-5 grid grid-cols-1 lg:grid-cols-12 gap-4">
+    
+    <!-- LEFT PANEL: Serial Monitor Terminal (7 Cols) -->
+    <section class="lg:col-span-7 flex flex-col bg-slate-900/60 rounded-xl border border-slate-800 overflow-hidden shadow-xl backdrop-blur-sm">
+      <!-- Terminal Header Bar -->
+      <div class="px-4 py-2.5 bg-slate-800/60 border-b border-slate-700/60 flex items-center justify-between text-xs">
+        <div class="flex items-center gap-2">
+          <i data-lucide="terminal" class="w-4 h-4 text-cyan-400"></i>
+          <span class="font-mono font-semibold tracking-wide text-slate-300">SERIAL CONSOLE</span>
+          <span id="rxByteCounter" class="text-[10px] text-slate-500 font-mono">0 RX / 0 TX</span>
+        </div>
+        <div class="flex items-center gap-2">
+          <!-- Protocol UUID selector -->
+          <select id="bleProtocol" class="bg-slate-950 border border-slate-700 text-slate-300 text-[11px] rounded px-2 py-1 font-mono focus:border-cyan-500 outline-none">
+            <option value="ffe0">HM-10 / AT-09 (0xFFE0)</option>
+            <option value="nordic">Nordic NUS (6E400001)</option>
+          </select>
+          <button onclick="clearTerminal()" title="Clear Console" class="p-1.5 rounded hover:bg-slate-700 text-slate-400 hover:text-slate-100 transition">
+            <i data-lucide="trash-2" class="w-3.5 h-3.5"></i>
+          </button>
+        </div>
+      </div>
+
+      <!-- Console Log Area -->
+      <div id="terminalBody" class="flex-1 p-3 font-mono text-xs overflow-y-auto space-y-1 bg-slate-950/80 min-h-[220px] max-h-[360px] lg:max-h-[460px] border-b border-slate-800/80">
+        <div class="text-slate-500 italic">[SYS] Ready. Connect to your HC-05/HM-10/ESP32 BLE module or test with virtual simulation.</div>
+        <div class="text-cyan-500/80 font-mono text-[11px]">[KEYMAP] Arrow keys on keyboard (↑, ↓, ←, →) or on-screen D-Pad actively mapped.</div>
+      </div>
+
+      <!-- Terminal Input Controls -->
+      <div class="p-3 bg-slate-900/80 flex flex-col sm:flex-row gap-2">
+        <div class="relative flex-1">
+          <input type="text" id="cmdInput" placeholder="Send AT command, hex, or ASCII (e.g. F, B, SPEED=150)..." 
+                 class="w-full bg-slate-950 border border-slate-700 focus:border-cyan-500 text-slate-100 rounded-lg px-3 py-2 text-xs font-mono outline-none pr-14 transition placeholder:text-slate-600">
+          <span class="absolute right-2.5 top-2 text-[10px] text-slate-500 font-mono hidden sm:inline">↵ Enter</span>
+        </div>
+        <div class="flex gap-2">
+          <select id="lineEnding" class="bg-slate-950 border border-slate-700 text-slate-400 text-xs rounded-lg px-2 py-2 font-mono outline-none">
+            <option value="none">None</option>
+            <option value="nl" selected>\n</option>
+            <option value="cr">\r</option>
+            <option value="both">\r\n</option>
+          </select>
+          <button onclick="sendManualCommand()" class="px-4 py-2 bg-cyan-600 hover:bg-cyan-500 active:bg-cyan-700 text-white font-semibold rounded-lg text-xs font-mono transition flex items-center gap-1.5 shadow">
+            <i data-lucide="send" class="w-3.5 h-3.5"></i>
+            <span>Send</span>
+          </button>
+        </div>
+      </div>
+    </section>
+
+    <!-- RIGHT PANEL: Arrow Keypad & Car Controls (5 Cols) -->
+    <section class="lg:col-span-5 flex flex-col justify-between bg-slate-900/60 rounded-xl border border-slate-800 p-4 shadow-xl backdrop-blur-sm">
+      <div>
+        <!-- Keypad Header & Live Indicator -->
+        <div class="flex items-center justify-between mb-3 border-b border-slate-800 pb-2">
+          <div class="flex items-center gap-2">
+            <i data-lucide="gamepad-2" class="w-4 h-4 text-cyan-400"></i>
+            <span class="font-mono text-xs font-bold uppercase tracking-wider text-slate-300">D-PAD CONTROLLER</span>
+          </div>
+          <div class="flex items-center gap-1 text-[11px] font-mono text-slate-400">
+            <span>ACTIVE:</span>
+            <span id="activeActionLabel" class="text-cyan-400 font-bold px-1.5 py-0.5 rounded bg-slate-950 border border-slate-800">STOPPED (S)</span>
+          </div>
+        </div>
+
+        <!-- Arrow Controls Grid (3x3 Matrix) -->
+        <div class="w-full max-w-[280px] sm:max-w-[300px] mx-auto aspect-square grid grid-cols-3 grid-rows-3 gap-2.5 sm:gap-3 p-3 bg-slate-950/70 border border-cyan-950/70 rounded-2xl neon-glow-cyan my-auto">
+          
+          <!-- Empty Top-Left -->
+          <div class="flex items-center justify-center">
+            <div class="w-2.5 h-2.5 rounded-full bg-cyan-900/40"></div>
+          </div>
+
+          <!-- FORWARD (F) -->
+          <button id="btnFwd" 
+                  class="dpad-btn relative bg-gradient-to-b from-cyan-600 to-cyan-700 hover:from-cyan-500 hover:to-cyan-600 text-slate-950 font-black rounded-xl flex flex-col items-center justify-center shadow-lg border border-cyan-400/40 transition">
+            <i data-lucide="chevron-up" class="w-8 h-8 stroke-[3]"></i>
+            <span class="text-[10px] font-mono font-bold tracking-widest mt-[-4px]">FWD (F)</span>
+          </button>
+
+          <!-- Empty Top-Right -->
+          <div class="flex items-center justify-center">
+            <div class="w-2.5 h-2.5 rounded-full bg-cyan-900/40"></div>
+          </div>
+
+          <!-- LEFT (L) -->
+          <button id="btnLeft" 
+                  class="dpad-btn bg-gradient-to-r from-cyan-600 to-cyan-700 hover:from-cyan-500 hover:to-cyan-600 text-slate-950 font-black rounded-xl flex flex-col items-center justify-center shadow-lg border border-cyan-400/40 transition">
+            <i data-lucide="chevron-left" class="w-8 h-8 stroke-[3]"></i>
+            <span class="text-[10px] font-mono font-bold tracking-widest mt-[-4px]">LFT (L)</span>
+          </button>
+
+          <!-- STOP (S) -->
+          <button id="btnStop" 
+                  class="dpad-btn bg-gradient-to-br from-rose-600 to-rose-700 hover:from-rose-500 hover:to-rose-600 text-white font-black rounded-xl flex flex-col items-center justify-center shadow-lg border border-rose-400/40 neon-glow-red transition">
+            <i data-lucide="octagon" class="w-6 h-6 stroke-[3]"></i>
+            <span class="text-[10px] font-mono font-bold tracking-widest mt-0.5">STOP (S)</span>
+          </button>
+
+          <!-- RIGHT (R) -->
+          <button id="btnRight" 
+                  class="dpad-btn bg-gradient-to-l from-cyan-600 to-cyan-700 hover:from-cyan-500 hover:to-cyan-600 text-slate-950 font-black rounded-xl flex flex-col items-center justify-center shadow-lg border border-cyan-400/40 transition">
+            <i data-lucide="chevron-right" class="w-8 h-8 stroke-[3]"></i>
+            <span class="text-[10px] font-mono font-bold tracking-widest mt-[-4px]">RGT (R)</span>
+          </button>
+
+          <!-- Empty Bottom-Left -->
+          <div class="flex items-center justify-center">
+            <div class="w-2.5 h-2.5 rounded-full bg-cyan-900/40"></div>
+          </div>
+
+          <!-- BACKWARD (B) -->
+          <button id="btnRev" 
+                  class="dpad-btn bg-gradient-to-t from-cyan-600 to-cyan-700 hover:from-cyan-500 hover:to-cyan-600 text-slate-950 font-black rounded-xl flex flex-col items-center justify-center shadow-lg border border-cyan-400/40 transition">
+            <i data-lucide="chevron-down" class="w-8 h-8 stroke-[3]"></i>
+            <span class="text-[10px] font-mono font-bold tracking-widest mt-[-4px]">REV (B)</span>
+          </button>
+
+          <!-- Empty Bottom-Right -->
+          <div class="flex items-center justify-center">
+            <div class="w-2.5 h-2.5 rounded-full bg-cyan-900/40"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Quick Action Buttons -->
+      <div class="mt-4 pt-3 border-t border-slate-800">
+        <span class="text-[10px] font-mono text-slate-400 block mb-2 uppercase tracking-wide">Quick Triggers:</span>
+        <div class="grid grid-cols-4 gap-2">
+          <button onclick="sendQuickCommand('X')" class="py-2 bg-slate-800/90 hover:bg-slate-700 border border-slate-700 text-xs font-mono rounded-lg text-slate-300 hover:text-cyan-400 transition">
+            HORN (X)
+          </button>
+          <button onclick="sendQuickCommand('W')" class="py-2 bg-slate-800/90 hover:bg-slate-700 border border-slate-700 text-xs font-mono rounded-lg text-slate-300 hover:text-cyan-400 transition">
+            LIGHT (W)
+          </button>
+          <button onclick="sendQuickCommand('1')" class="py-2 bg-slate-800/90 hover:bg-slate-700 border border-slate-700 text-xs font-mono rounded-lg text-slate-300 hover:text-cyan-400 transition">
+            SPD-1
+          </button>
+          <button onclick="sendQuickCommand('2')" class="py-2 bg-slate-800/90 hover:bg-slate-700 border border-slate-700 text-xs font-mono rounded-lg text-slate-300 hover:text-cyan-400 transition">
+            SPD-2
+          </button>
+        </div>
+      </div>
+
+      <!-- Simulation Mode Banner / Switch -->
+      <div class="mt-3 flex items-center justify-between bg-slate-950/60 px-3 py-2 rounded-lg border border-slate-800/60 text-xs font-mono">
+        <span class="text-slate-400 flex items-center gap-1.5">
+          <i data-lucide="sliders" class="w-3.5 h-3.5 text-cyan-400"></i>
+          Test Simulation Mode
+        </span>
+        <label class="relative inline-flex items-center cursor-pointer">
+          <input type="checkbox" id="simToggle" onchange="toggleSimulation(this.checked)" class="sr-only peer">
+          <div class="w-8 h-4 bg-slate-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:bg-cyan-600"></div>
+        </label>
+      </div>
+
+    </section>
+  </main>
+
+  <!-- Footer Help Info -->
+  <footer class="bg-slate-950/90 border-t border-slate-800/60 text-[11px] font-mono text-slate-500 py-2.5 px-4 text-center">
+    Works on Google Chrome, Edge, and Bluefy (iOS) over HTTPS. Pointer down/hold streams directional ASCII, release transmits 'S'.
+  </footer>
+
+  <!-- Application Logic -->
+  <script>
+    // Lucide initialization
+    lucide.createIcons();
+
+    // Standard UART BLE Service & Characteristic UUID Profiles
+    const BLE_PROFILES = {
+      ffe0: {
+        service: 0xffe0,
+        rxTx: 0xffe1
+      },
+      nordic: {
+        service: '6e400001-b5a3-f393-e0a9-e50e24dcca9e',
+        tx: '6e400002-b5a3-f393-e0a9-e50e24dcca9e', // write to peripheral
+        rx: '6e400003-b5a3-f393-e0a9-e50e24dcca9e'  // notify from peripheral
+      }
+    };
+
+    // State
+    let bleDevice = null;
+    let bleServer = null;
+    let txCharacteristic = null;
+    let rxCharacteristic = null;
+    let isSimulation = false;
+    let activeKeyCommand = null;
+    let txCount = 0;
+    let rxCount = 0;
+
+    // Check Web Bluetooth support
+    window.addEventListener('DOMContentLoaded', () => {
+      if (!navigator.bluetooth) {
+        showNotice('Web Bluetooth is not supported in this browser. Enabling Simulation Mode so you can preview controls.', 'warning');
+        const simToggle = document.getElementById('simToggle');
+        if (simToggle) {
+          simToggle.checked = true;
+          toggleSimulation(true);
+        }
+      }
+      setupDpadListeners();
+      setupKeyboardListeners();
+      setupInputListeners();
+    });
+
+    // Notification Helper
+    function showNotice(message, type = 'info') {
+      const banner = document.getElementById('noticeBanner');
+      const content = document.getElementById('noticeContent');
+      banner.classList.remove('hidden');
+
+      let colors = 'bg-cyan-950/70 border-cyan-800 text-cyan-300';
+      if (type === 'warning') colors = 'bg-amber-950/70 border-amber-800 text-amber-300';
+      if (type === 'error') colors = 'bg-rose-950/70 border-rose-800 text-rose-300';
+      if (type === 'success') colors = 'bg-emerald-950/70 border-emerald-800 text-emerald-300';
+
+      content.className = `flex items-center justify-between p-3 rounded-lg text-xs font-mono border ${colors}`;
+      content.innerHTML = `
+        <div class="flex items-center gap-2">
+          <span>${message}</span>
+        </div>
+        <button onclick="document.getElementById('noticeBanner').classList.add('hidden')" class="p-1 hover:opacity-75">✕</button>
+      `;
+    }
+
+    // Update Connection Badge
+    function updateConnectionState(state, deviceName = '') {
+      const badge = document.getElementById('statusBadge');
+      const text = document.getElementById('statusText');
+      const btnConnect = document.getElementById('btnConnect');
+      const btnDisconnect = document.getElementById('btnDisconnect');
+
+      if (state === 'connected') {
+        badge.className = 'flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-mono font-semibold bg-emerald-950/60 text-emerald-400 border border-emerald-800/60';
+        badge.querySelector('span').className = 'w-2 h-2 rounded-full bg-emerald-500';
+        text.innerText = `ONLINE: ${deviceName || 'BLE CAR'}`;
+        btnConnect.classList.add('hidden');
+        btnDisconnect.classList.remove('hidden');
+        btnDisconnect.classList.add('flex');
+      } else if (state === 'connecting') {
+        badge.className = 'flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-mono font-semibold bg-amber-950/60 text-amber-400 border border-amber-800/60';
+        badge.querySelector('span').className = 'w-2 h-2 rounded-full bg-amber-500 animate-pulse';
+        text.innerText = 'CONNECTING...';
+      } else {
+        badge.className = 'flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-mono font-semibold bg-rose-950/60 text-rose-400 border border-rose-800/60';
+        badge.querySelector('span').className = 'w-2 h-2 rounded-full bg-rose-500';
+        text.innerText = 'DISCONNECTED';
+        btnConnect.classList.remove('hidden');
+        btnDisconnect.classList.add('hidden');
+        btnDisconnect.classList.remove('flex');
+      }
+    }
+
+    // Bluetooth Connection
+    async function handleConnect() {
+      if (!navigator.bluetooth) {
+        showNotice('Web Bluetooth is disabled or unsupported. Use Google Chrome / Edge or enable Simulation Mode.', 'error');
+        return;
+      }
+
+      const protocolChoice = document.getElementById('bleProtocol').value;
+      updateConnectionState('connecting');
+
+      try {
+        logToTerminal('SYS', `Scanning for BLE UART devices (${protocolChoice.toUpperCase()})...`);
+
+        let optionalServices = [];
+        if (protocolChoice === 'ffe0') {
+          optionalServices.push(0xffe0);
+        } else {
+          optionalServices.push(BLE_PROFILES.nordic.service);
+        }
+
+        bleDevice = await navigator.bluetooth.requestDevice({
+          acceptAllDevices: true,
+          optionalServices: optionalServices
+        });
+
+        bleDevice.addEventListener('gattserverdisconnected', onDeviceDisconnected);
+
+        logToTerminal('SYS', `Connecting to ${bleDevice.name || 'Unnamed Device'}...`);
+        bleServer = await bleDevice.gatt.connect();
+
+        if (protocolChoice === 'ffe0') {
+          const service = await bleServer.getPrimaryService(0xffe0);
+          txCharacteristic = await service.getCharacteristic(0xffe1);
+          rxCharacteristic = txCharacteristic;
+        } else {
+          const service = await bleServer.getPrimaryService(BLE_PROFILES.nordic.service);
+          txCharacteristic = await service.getCharacteristic(BLE_PROFILES.nordic.tx);
+          rxCharacteristic = await service.getCharacteristic(BLE_PROFILES.nordic.rx);
+        }
+
+        // Enable RX Notifications if supported
+        if (rxCharacteristic && rxCharacteristic.properties.notify) {
+          await rxCharacteristic.startNotifications();
+          rxCharacteristic.addEventListener('characteristicvaluechanged', handleIncomingData);
+          logToTerminal('SYS', 'Notifications enabled on RX UART channel.');
+        }
+
+        updateConnectionState('connected', bleDevice.name);
+        showNotice(`Successfully connected to ${bleDevice.name || 'BLE Device'}!`, 'success');
+        logToTerminal('SYS', 'Ready to transmit motor commands (F, B, L, R, S).');
+
+      } catch (err) {
+        console.error(err);
+        updateConnectionState('disconnected');
+        logToTerminal('ERR', err.message || 'Connection cancelled or failed.');
+        showNotice(`Connection failed: ${err.message}`, 'error');
+      }
+    }
+
+    // Bluetooth Disconnect
+    function handleDisconnect() {
+      if (bleDevice && bleDevice.gatt.connected) {
+        bleDevice.gatt.disconnect();
+      } else {
+        onDeviceDisconnected();
+      }
+    }
+
+    function onDeviceDisconnected() {
+      bleServer = null;
+      txCharacteristic = null;
+      rxCharacteristic = null;
+      updateConnectionState('disconnected');
+      logToTerminal('SYS', 'BLE Device disconnected.');
+      showNotice('Device disconnected.', 'warning');
+    }
+
+    // Incoming Data Handler (RX)
+    function handleIncomingData(event) {
+      const value = event.target.value;
+      const decoder = new TextDecoder('utf-8');
+      const text = decoder.decode(value);
+      rxCount += value.byteLength;
+      updateCounters();
+      logToTerminal('RX', text.trim());
+    }
+
+    // Core Transmission Function (TX)
+    async function transmit(charOrString) {
+      if (!charOrString) return;
+      txCount += charOrString.length;
+      updateCounters();
+      logToTerminal('TX', charOrString);
+
+      // Simulation mode response
+      if (isSimulation) {
+        simulateEcho(charOrString);
+        return;
+      }
+
+      if (!txCharacteristic) {
+        return;
+      }
+
+      try {
+        const encoder = new TextEncoder();
+        const data = encoder.encode(charOrString);
+        if (txCharacteristic.writeValueWithoutResponse) {
+          await txCharacteristic.writeValueWithoutResponse(data);
+        } else {
+          await txCharacteristic.writeValue(data);
+        }
+      } catch (err) {
+        console.error('Transmit error:', err);
+        logToTerminal('ERR', `Write failure: ${err.message}`);
+      }
+    }
+
+    // Send command with selected line ending
+    function sendManualCommand() {
+      const input = document.getElementById('cmdInput');
+      let val = input.value;
+      if (!val) return;
+
+      const ending = document.getElementById('lineEnding').value;
+      if (ending === 'nl') val += '\n';
+      else if (ending === 'cr') val += '\r';
+      else if (ending === 'both') val += '\r\n';
+
+      transmit(val);
+      input.value = '';
+    }
+
+    function sendQuickCommand(val) {
+      transmit(val + '\n');
+    }
+
+    // Terminal Logging UI
+    function logToTerminal(type, message) {
+      const container = document.getElementById('terminalBody');
+      const time = new Date().toTimeString().split(' ')[0] + '.' + String(new Date().getMilliseconds()).padStart(3, '0');
+      
+      const row = document.createElement('div');
+      row.className = 'flex items-start gap-2 leading-relaxed';
+
+      let tagColor = 'text-slate-500';
+      let msgColor = 'text-slate-300';
+
+      if (type === 'TX') {
+        tagColor = 'text-cyan-400 font-bold';
+        msgColor = 'text-cyan-200';
+      } else if (type === 'RX') {
+        tagColor = 'text-emerald-400 font-bold';
+        msgColor = 'text-emerald-200';
+      } else if (type === 'ERR') {
+        tagColor = 'text-rose-400 font-bold';
+        msgColor = 'text-rose-300';
+      } else if (type === 'SYS') {
+        tagColor = 'text-amber-400';
+        msgColor = 'text-amber-200/90';
+      }
+
+      row.innerHTML = `
+        <span class="text-slate-600 text-[10px] select-none pt-0.5">[${time}]</span>
+        <span class="${tagColor} text-[11px] min-w-[28px]">[${type}]</span>
+        <span class="${msgColor} break-all font-mono">${escapeHtml(message)}</span>
+      `;
+
+      container.appendChild(row);
+      container.scrollTop = container.scrollHeight;
+    }
+
+    function clearTerminal() {
+      document.getElementById('terminalBody').innerHTML = '';
+      logToTerminal('SYS', 'Terminal buffer cleared.');
+    }
+
+    function updateCounters() {
+      document.getElementById('rxByteCounter').innerText = `${rxCount} RX / ${txCount} TX`;
+    }
+
+    function escapeHtml(text) {
+      return text.replace(/[&<>"']/g, function(m) {
+        return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' }[m];
+      });
+    }
+
+    // Simulation echo generator
+    function simulateEcho(sentText) {
+      setTimeout(() => {
+        const clean = sentText.trim();
+        if (clean === 'F') logToTerminal('RX', 'ACK: MOTORS_FORWARD_PWM_255');
+        else if (clean === 'B') logToTerminal('RX', 'ACK: MOTORS_REVERSE_PWM_255');
+        else if (clean === 'L') logToTerminal('RX', 'ACK: STEER_LEFT_FULL');
+        else if (clean === 'R') logToTerminal('RX', 'ACK: STEER_RIGHT_FULL');
+        else if (clean === 'S') logToTerminal('RX', 'ACK: MOTORS_COAST_HALT');
+        else logToTerminal('RX', `ECHO: ${clean}`);
+      }, 70);
+    }
+
+    function toggleSimulation(enabled) {
+      isSimulation = enabled;
+      const simTag = document.getElementById('simTag');
+      if (enabled) {
+        simTag.classList.remove('hidden');
+        logToTerminal('SYS', 'Simulation Mode enabled: commands will execute virtually with mock telemetry.');
+      } else {
+        simTag.classList.add('hidden');
+        logToTerminal('SYS', 'Simulation Mode disabled.');
+      }
+    }
+
+    // Directional Keypad Handlers
+    function startDirection(cmd, label, elementId) {
+      if (activeKeyCommand === cmd) return;
+      activeKeyCommand = cmd;
+      document.getElementById('activeActionLabel').innerText = `${label} (${cmd})`;
+      document.getElementById('activeActionLabel').className = 'text-cyan-300 font-bold px-1.5 py-0.5 rounded bg-cyan-950 border border-cyan-500 animate-pulse';
+      
+      if (elementId) {
+        document.getElementById(elementId).classList.add('active');
+      }
+      transmit(cmd);
+    }
+
+    function stopDirection(elementId) {
+      if (!activeKeyCommand || activeKeyCommand === 'S') return;
+      activeKeyCommand = 'S';
+      document.getElementById('activeActionLabel').innerText = 'STOPPED (S)';
+      document.getElementById('activeActionLabel').className = 'text-slate-400 font-bold px-1.5 py-0.5 rounded bg-slate-950 border border-slate-800';
+
+      ['btnFwd', 'btnRev', 'btnLeft', 'btnRight'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.classList.remove('active');
+      });
+
+      transmit('S');
+    }
+
+    // Setup Pointer Events for D-Pad
+    function setupDpadListeners() {
+      const mappings = [
+        { id: 'btnFwd', cmd: 'F', label: 'FORWARD' },
+        { id: 'btnRev', cmd: 'B', label: 'REVERSE' },
+        { id: 'btnLeft', cmd: 'L', label: 'LEFT' },
+        { id: 'btnRight', cmd: 'R', label: 'RIGHT' },
+      ];
+
+      mappings.forEach(m => {
+        const btn = document.getElementById(m.id);
+        if (!btn) return;
+
+        // Pointerdown handles both touch on mobile and mouse on desktop
+        btn.addEventListener('pointerdown', (e) => {
+          e.preventDefault();
+          startDirection(m.cmd, m.label, m.id);
+        });
+
+        // Pointerup and cancel stop the car
+        const stopHandler = (e) => {
+          e.preventDefault();
+          stopDirection(m.id);
+        };
+
+        btn.addEventListener('pointerup', stopHandler);
+        btn.addEventListener('pointercancel', stopHandler);
+        btn.addEventListener('pointerleave', stopHandler);
+      });
+
+      // Dedicated STOP button
+      const stopBtn = document.getElementById('btnStop');
+      stopBtn.addEventListener('click', () => {
+        stopDirection('btnStop');
+      });
+    }
+
+    // Setup Keyboard Arrow Listeners
+    function setupKeyboardListeners() {
+      window.addEventListener('keydown', (e) => {
+        // Avoid stealing keystrokes when typing commands in input
+        if (document.activeElement.tagName === 'INPUT' || document.activeElement.tagName === 'TEXTAREA') {
+          return;
+        }
+
+        switch (e.key) {
+          case 'ArrowUp':
+          case 'w':
+          case 'W':
+            e.preventDefault();
+            startDirection('F', 'FORWARD', 'btnFwd');
+            break;
+          case 'ArrowDown':
+          case 's':
+          case 'S':
+            e.preventDefault();
+            startDirection('B', 'REVERSE', 'btnRev');
+            break;
+          case 'ArrowLeft':
+          case 'a':
+          case 'A':
+            e.preventDefault();
+            startDirection('L', 'LEFT', 'btnLeft');
+            break;
+          case 'ArrowRight':
+          case 'd':
+          case 'D':
+            e.preventDefault();
+            startDirection('R', 'RIGHT', 'btnRight');
+            break;
+          case ' ': // Spacebar for emergency stop
+            e.preventDefault();
+            stopDirection('btnStop');
+            break;
+        }
+      });
+
+      window.addEventListener('keyup', (e) => {
+        if (document.activeElement.tagName === 'INPUT') return;
+        if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'w', 'a', 's', 'd', 'W', 'A', 'S', 'D'].includes(e.key)) {
+          e.preventDefault();
+          stopDirection();
+        }
+      });
+    }
+
+    function setupInputListeners() {
+      const input = document.getElementById('cmdInput');
+      input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+          sendManualCommand();
+        }
+      });
+    }
+  </script>
+</body>
+</html>
